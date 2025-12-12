@@ -3,30 +3,59 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ChatWindow from './components/ChatWindow';
-import PromptInput from './components/PromptInput'; // Will be defined next
+import PromptInput from './components/PromptInput';
 
-// Temporary sample data for testing the UI layout
-const initialChatHistory = [
-  { id: 1, role: 'ai', text: 'Welcome! Tell me what kind of tattoo you want. (e.g., "I want a fierce lion on my chest, black and white")', image_url: null },
-  { id: 2, role: 'user', text: 'I want a tattoo of a geometric wolf on my forearm.', image_url: null },
-  { id: 3, role: 'ai', text: 'Analyzing... Here is a concept!', image_url: 'https://via.placeholder.com/400x400/0000FF/FFFFFF?text=Generated+Wolf+Tattoo' },
-];
-
+// Define the URL for your Python FastAPI backend
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 function App() {
-  // Central state to manage the entire conversation
-  const [chatHistory, setChatHistory] = useState(initialChatHistory);
+  // --- STATE MANAGEMENT ---
+  const [chatHistory, setChatHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Placeholder function for handling the actual API call (defined next)
-  // Save this as frontend/src/App.jsx
+  // --- 1. HISTORY LOADING (useEffect) ---
+  // Fetches conversation history from the FastAPI database on component mount
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/history`);
+        const historyData = response.data;
 
-  // ... imports and initial state remains the same ...
+        // Add a welcome message if the database is truly empty
+        if (historyData.length === 0) {
+          historyData.push({
+            id: 0,
+            role: 'ai',
+            text: 'Welcome to the AI Tattoo Designer! Tell me what kind of tattoo you want (e.g., "fierce lion on my chest, black and white").',
+            image_url: null
+          });
+        }
 
+        setChatHistory(historyData);
+
+      } catch (error) {
+        console.error("Failed to fetch chat history:", error);
+        // Fallback for a connection error
+        setChatHistory([{
+          id: -1,
+          role: 'ai',
+          text: 'Connection Error: Could not reach the backend API. Please ensure FastAPI server is running.',
+          image_url: null
+        }]);
+      }
+    };
+
+    fetchHistory();
+  }, []);
+
+  // --- 2. PROMPT SUBMISSION HANDLER ---
   const handleSubmitPrompt = async (promptText) => {
-    // 1. Add user message to history immediately
+    // 1. Validation and Setup
+    if (!promptText.trim()) return;
+
+    // Add user message to history immediately for quick UI feedback
     const newUserMessage = {
-      id: Date.now() + 1,
+      id: Date.now() + 1, // Use timestamp for unique key
       role: 'user',
       text: promptText,
       image_url: null
@@ -35,14 +64,14 @@ function App() {
     setIsLoading(true);
 
     try {
-      // --- REAL API CALL ---
-      const response = await axios.post('http://127.0.0.1:8000/api/generate_tattoo', {
-        user_prompt: promptText // Matches the Pydantic model structure
+      // --- API CALL to FastAPI endpoint ---
+      const response = await axios.post(`${API_BASE_URL}/api/generate_tattoo`, {
+        user_prompt: promptText // Structure matches the Pydantic model
       });
 
       const responseData = response.data;
 
-      // 2. Process AI Response
+      // 2. Process and Format AI Response
       const aiResponse = {
         id: Date.now() + 2,
         role: 'ai',
@@ -50,16 +79,17 @@ function App() {
         image_url: responseData.image_url,
       };
 
-      // 3. Update history with the AI response
+      // 3. Update history with the final AI response (including image URL)
       setChatHistory(prev => [...prev, aiResponse]);
 
     } catch (error) {
       console.error("Image Generation API Failed:", error);
+
       // Add an error message to the chat history if the API fails
       const errorMessage = {
         id: Date.now() + 2,
         role: 'ai',
-        text: "🚨 Error: The AI service failed to generate the image. Please check the backend server logs.",
+        text: "🚨 Error: Image generation failed. Check backend logs for API key or generation error.",
         image_url: null,
       };
       setChatHistory(prev => [...prev, errorMessage]);
@@ -70,8 +100,6 @@ function App() {
     }
   };
 
-  // ... rest of the App component remains the same ...
-
 
   return (
     <div style={{ maxWidth: '800px', margin: '50px auto', padding: '20px', backgroundColor: 'white', boxShadow: '0 0 10px rgba(0,0,0,0.1)' }}>
@@ -80,7 +108,7 @@ function App() {
       {/* 1. Chat History Area */}
       <ChatWindow chatHistory={chatHistory} isLoading={isLoading} />
 
-      {/* 2. Input Field (Passing the handler) */}
+      {/* 2. Input Field (Passes the handler and loading state) */}
       <PromptInput handleSubmitPrompt={handleSubmitPrompt} isLoading={isLoading} />
 
     </div>
