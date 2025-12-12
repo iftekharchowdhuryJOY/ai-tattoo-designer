@@ -5,3 +5,5 @@ python-multipart
 pydantic
 python-dotenv
 # We will add database and AI dependencies later.
+sqlalchemy
+psycopg2-binary # Driver for PostgreSQL
