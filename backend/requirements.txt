@@ -1,0 +1,7 @@
+# Create the file requirements.txt and add:
+fastapi
+uvicorn
+python-multipart
+pydantic
+python-dotenv
+# We will add database and AI dependencies later.
