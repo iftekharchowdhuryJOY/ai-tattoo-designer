@@ -7,6 +7,14 @@ import time
 import random 
 from app.database import Base, SessionLocal, get_db, Conversation
 
+
+# --- NEW REDIS IMPORTS ---
+import redis
+from redis.exceptions import ConnectionError
+import json
+import hashlib
+import os
+
 # --- NEW GEMINI IMPORTS ---
 from google import genai
 from google.genai.errors import APIError
@@ -28,32 +36,58 @@ except (ValueError, Exception) as e:
     client = None
 
 
+try:
+    redis_client = redis.Redis(
+        host=os.getenv("REDIS_HOST", "localhost"),
+        port=int(os.getenv("REDIS_PORT", 6379)),
+        decode_responses=True
+    )
+    redis_client.ping()
+    print("Redis connection successful")
+except ConnectionError as e:
+    print(f"Error connecting to Redis: {e}")
+    redis_client = None
 
 # --- NEW HELPER: Prompt Engineering Function ---
 # In backend/main.py, replace the existing engineer_prompt function:
 
+# In backend/main.py, replace the existing engineer_prompt function:
+
+# In backend/main.py, modify the engineer_prompt function one last time:
+# In backend/main.py, replace the existing engineer_prompt function:
+
 def engineer_prompt(user_input: str) -> str:
     """
-    Translates user's conversational prompt into a high-quality, technical prompt.
-    Adds key phrases to force tattoo composition on skin.
+    Final prompt version using Aggressive Keyword Overloading and Style Isolation
+    to force the output to be a tattoo design on skin.
     """
-    # Core technical modifiers for a professional, photorealistic tattoo concept
-    # ADDED: "Tattoo art", "Applied to skin", "Stencil effect"
+    # 1. CORE STYLE MODIFIERS (Focusing entirely on the design/illustration)
+    # Use repetitive and strong artistic terms
     technical_modifiers = (
-        ", Tattoo art, Applied to skin, Clean lines, Vector art, "
-        "High contrast, black and grey ink, hyper-detailed linework, "
-        "professional studio photo, no background, " # Forces focus on the tattoo
-        "photorealistic illustration."
+        ", **Highly Detailed Tattoo Illustration**, **Blackwork Style Tattoo**, "
+        "Intricate Linework, **Digital Painting**, **Vector Art**, "
+        "clean lines, high contrast, on human skin texture, studio lighting, "
+        "isolated composition, no background elements." # Rejects scenery
     )
     
-    # Prepend instructions to ensure it's a tattoo design on the body
+    # 2. ANTI-PROMPT TAGS (These explicitly tell the AI what NOT to draw)
+    # The more detail we give the AI about what NOT to do, the better.
+    anti_prompts = (
+        " ::-1, " # Some models use this for negative weighting
+        " **NOT** a photo, **NOT** a landscape, **NOT** scenery, "
+        " **NOT** sunset, **NOT** rocks, **NOT** blurry, **NOT** watermark, "
+        " **NOT** photography" 
+    )
+    
+    # 3. FINAL COMPOSITE PROMPT
     final_prompt = (
-        f"A photorealistic **tattoo design** of '{user_input}'. "
-        f"The image must show the tattoo fully realized on the corresponding human body part. "
-        f"The design should be rendered as high-resolution tattoo art. {technical_modifiers}"
+        f"A **Blackwork Tattoo Illustration** of '{user_input}'. "
+        f"The image must show the **fully inked design on the corresponding clean human body part** (e.g., bicep). "
+        f"The focus must be 100% on the tattoo art. {technical_modifiers} {anti_prompts}"
     )
     
     return final_prompt
+
 
 # Utility function to create the database tables
 def create_tables():
@@ -117,16 +151,46 @@ def get_chat_history(db: Session = Depends(get_db)):
 # --- UNIFIED IMAGE GENERATION ENDPOINT ---
 # In backend/main.py, modify the generate_tattoo endpoint:
 
+# In backend/main.py, replace the entire generate_tattoo function:
+
 @app.post("/api/generate_tattoo")
 def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
-    # Check if the client is initialized before proceeding
+    # 1. Check for AI Service Initialization
     if not client:
         raise HTTPException(status_code=500, detail="AI Service Initialization Error. GEMINI_API_KEY is likely missing or invalid.")
         
     prompt = request.user_prompt
     engineered_prompt = engineer_prompt(prompt)
     
-    # 1. Log User Message to DB (same as before)
+    # --- 2. CACHE CHECK ---
+    cache_key = None
+    if redis_client:
+        # Create a unique key from the engineered prompt using SHA256
+        cache_key = hashlib.sha256(engineered_prompt.encode('utf-8')).hexdigest()
+        cached_data = redis_client.hgetall(cache_key) # HGETALL retrieves the hash fields
+        
+        if cached_data and 'image_url' in cached_data:
+            print("CACHE HIT: Serving response from Redis.")
+            
+            # Log the CACHE HIT in the database
+            ai_message_cache = Conversation(
+                role='ai', 
+                prompt_text=f"(CACHED) {cached_data['ai_text']}", 
+                generated_image_url=cached_data['image_url'], 
+                engineered_prompt=engineered_prompt
+            )
+            db.add(ai_message_cache)
+            db.commit()
+            
+            # Return the cached response instantly
+            return {
+                "status": "success",
+                "ai_text": cached_data['ai_text'],
+                "image_url": cached_data['image_url'],
+                "engineered_prompt": engineered_prompt
+            }
+    
+    # --- 3. CACHE MISS: LOG USER MESSAGE (DB Write) ---
     user_message = Conversation(
         role='user', 
         prompt_text=prompt, 
@@ -137,65 +201,62 @@ def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
     db.commit() 
     db.refresh(user_message)
     
-    # --- START REAL GEMINI API LOGIC ---
+    # --- 4. CACHE MISS: GEMINI API CALL (High Latency Operation) ---
     try:
-        print(f"Sending engineered prompt to Gemini: {engineered_prompt}")
+        print(f"CACHE MISS: Calling Gemini with prompt: {engineered_prompt}")
 
-        # The core image generation call (Using the best available model for images)
-        # NOTE: You may need to verify the exact model name for image generation availability.
+        # Call the Gemini API for image generation
         gemini_response = client.models.generate_images(
-            model='imagen-4.0-generate-001', # Using a current high-quality image model name
+            model='imagen-4.0-generate-001', 
             prompt=engineered_prompt,
             config=dict(
                 number_of_images=1,
-                aspect_ratio="3:4",
-                output_mime_type="image/jpeg"
+                aspect_ratio='1:1'
             )
         )
         
-        # Process the result
         if not gemini_response.generated_images:
             raise APIError("Gemini generated no images for the prompt.")
             
-        # The result includes a base64 string or a cloud reference.
-        # For simplicity and to avoid complex file uploads (S3/GCS), we'll return a 
-        # placeholder image and log the successful prompt.
-        
-        # !!! IMPORTANT: In a production app, you would upload gemini_response.generated_images[0].image.image_bytes
-        # to a cloud storage service (like Supabase Storage or AWS S3) and return that public URL.
-        # For now, we use a fixed success placeholder URL.
-        
-        image_url = 'https://picsum.photos/400/400?random=' + str(random.randint(1, 100)) # Placeholder for successful API call
+        # Get the placeholder URL for the successful generation
+        image_url = 'https://picsum.photos/400/400?random=' + str(random.randint(1, 100))
         ai_response_text = f"Analyzing your request for '{prompt}'... Here is your high-resolution AI-designed tattoo concept!"
 
     except APIError as e:
-        print(f"Gemini API Error: {e}")
-        # Log the failure in the database
-        ai_message = Conversation(
+        # Log failure
+        ai_message_fail = Conversation(
             role='ai', 
             prompt_text=f"🚨 Gemini API Failed: {e}", 
             generated_image_url=None, 
             engineered_prompt=engineered_prompt
         )
-        db.add(ai_message)
+        db.add(ai_message_fail)
         db.commit()
-        db.refresh(ai_message)
-        
-        # Re-raise the HTTP exception so the frontend displays the error message
         raise HTTPException(status_code=500, detail=f"AI Generation Failed: {e}")
 
-    # 4. Log Successful AI Response to DB
-    ai_message = Conversation(
+    # --- 5. CACHE WRITE (DB Write & Redis Write) ---
+    
+    # DB Write (Log successful AI response)
+    ai_message_success = Conversation(
         role='ai', 
         prompt_text=ai_response_text, 
         generated_image_url=image_url, 
         engineered_prompt=engineered_prompt
     )
-    db.add(ai_message)
+    db.add(ai_message_success)
     db.commit() 
-    db.refresh(ai_message)
+    
+    # Redis Write (Store the result for 24 hours)
+    if redis_client and cache_key:
+        cache_data = {
+            "ai_text": ai_response_text,
+            "image_url": image_url,
+        }
+        redis_client.hset(cache_key, mapping=cache_data)
+        redis_client.expire(cache_key, 60 * 60 * 24) # TTL: 24 hours
+        print("CACHE WRITE: Stored successful response in Redis.")
 
-    # 5. Return Response
+    # 6. Return Final Response
     return {
         "status": "success",
         "ai_text": ai_response_text,
