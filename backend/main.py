@@ -1,11 +1,13 @@
-from fastapi import FastAPI, Depends, HTTPException # <-- Added HTTPException
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks # <-- Added HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import time 
 import random 
-from app.database import Base, SessionLocal, get_db, Conversation
+from app.database import Base, AsyncSessionLocal, get_db_async, Conversation
 
 
 # --- NEW REDIS IMPORTS ---
@@ -89,16 +91,55 @@ def engineer_prompt(user_input: str) -> str:
     return final_prompt
 
 
-# Utility function to create the database tables
-def create_tables():
-    from app.database import engine
-    # This will create the 'conversations' table if it doesn't already exist
-    Base.metadata.create_all(bind=engine)
 
-# Call the function once at startup
-create_tables()
+async def log_ai_response_in_background(
+    ai_response_text: str, 
+    image_url: str, 
+    engineered_prompt: str, 
+    is_cache_hit: bool
+):
+    """
+    Asynchronously handles the database logging. Executed by FastAPI 
+    in the background after the main HTTP response is sent.
+    """
+    async with AsyncSessionLocal() as db:
+        try:
+            if is_cache_hit:
+                response_text = f"(CACHED) {ai_response_text}"
+            else:
+                response_text = ai_response_text
+
+            ai_message_log = Conversation(
+                role='ai', 
+                prompt_text=response_text, 
+                generated_image_url=image_url, 
+                engineered_prompt=engineered_prompt
+            )
+            db.add(ai_message_log)
+            await db.commit()
+            print(f"Background Task Complete: Successfully logged AI response. Cache Hit: {is_cache_hit}")
+        except Exception as e:
+            # Crucial to catch errors in background tasks
+            print(f"Background Task Error: Failed to log AI response to DB: {e}")
+
+
+
+
+# In backend/main.py (Find the create_tables function and replace it)
 
 app = FastAPI()
+
+async def create_tables(): # <-- FUNCTION IS NOW ASYNCHRONOUS
+    from app.database import engine, Base
+    # Use the async engine to run the table creation command
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+# Call the function once at startup using a standard event handler
+@app.on_event("startup")
+async def startup_event():
+    await create_tables()
+
 
 # --- Pydantic Model ---
 class PromptRequest(BaseModel):
@@ -128,61 +169,66 @@ def read_root():
 def test_connection():
     return {"status": "Success", "data": "Backend is running and talking to FastAPI!"}
 
-
+from app.database import get_db_async
 # --- History Retrieval Endpoint ---
 @app.get("/api/history", response_model=List[dict])
-def get_chat_history(db: Session = Depends(get_db)):
+async def get_chat_history(db: AsyncSession = Depends(get_db_async)): # <-- Use async dependency
     """
-    Fetches the entire chat history from the database, ordered by timestamp.
+    Fetches the entire chat history from the database asynchronously.
     """
-    history = db.query(Conversation).order_by(Conversation.timestamp).all()
+    # Use async ORM commands
+    result = await db.execute(select(Conversation).order_by(Conversation.timestamp))
+    history = result.scalars().all()
     
+    # ... (return formatting remains the same) ...
     return [
         {
             "id": msg.id,
             "role": msg.role,
             "text": msg.prompt_text,
             "image_url": msg.generated_image_url,
-            "timestamp": msg.timestamp.isoformat(),
+            "timestamp": msg.timestamp.isoformat(), 
         }
         for msg in history
     ]
-
 # --- UNIFIED IMAGE GENERATION ENDPOINT ---
 # In backend/main.py, modify the generate_tattoo endpoint:
 
 # In backend/main.py, replace the entire generate_tattoo function:
+# In backend/main.py, replace the entire generate_tattoo function:
 
 @app.post("/api/generate_tattoo")
-def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
+async def generate_tattoo(
+    request: PromptRequest,     
+    background_tasks: BackgroundTasks, # <-- Accepts background task handler
+    db: AsyncSession = Depends(get_db_async)
+):
     # 1. Check for AI Service Initialization
     if not client:
-        raise HTTPException(status_code=500, detail="AI Service Initialization Error. GEMINI_API_KEY is likely missing or invalid.")
+        raise HTTPException(status_code=500, detail="AI Service Initialization Error. GEMINI_API_KEY is missing.")
         
     prompt = request.user_prompt
     engineered_prompt = engineer_prompt(prompt)
     
-    # --- 2. CACHE CHECK ---
+    # --- 2. CACHE CHECK (Redis) ---
     cache_key = None
     if redis_client:
-        # Create a unique key from the engineered prompt using SHA256
         cache_key = hashlib.sha256(engineered_prompt.encode('utf-8')).hexdigest()
-        cached_data = redis_client.hgetall(cache_key) # HGETALL retrieves the hash fields
+        cached_data = redis_client.hgetall(cache_key)
         
         if cached_data and 'image_url' in cached_data:
             print("CACHE HIT: Serving response from Redis.")
             
-            # Log the CACHE HIT in the database
-            ai_message_cache = Conversation(
-                role='ai', 
-                prompt_text=f"(CACHED) {cached_data['ai_text']}", 
-                generated_image_url=cached_data['image_url'], 
-                engineered_prompt=engineered_prompt
+            # Log the CACHE HIT in the BACKGROUND
+            background_tasks.add_task(
+                log_ai_response_in_background,
+                ai_response_text=cached_data['ai_text'],
+                image_url=cached_data['image_url'],
+                engineered_prompt=engineered_prompt,
+                is_cache_hit=True
             )
-            db.add(ai_message_cache)
-            db.commit()
             
-            # Return the cached response instantly
+            # Return INSTANTLY
             return {
                 "status": "success",
                 "ai_text": cached_data['ai_text'],
@@ -190,7 +236,8 @@ def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
                 "engineered_prompt": engineered_prompt
             }
     
-    # --- 3. CACHE MISS: LOG USER MESSAGE (DB Write) ---
+    # --- 3. CACHE MISS: LOG USER MESSAGE (Synchronous Write) ---
+    # Must be synchronous so the user's message appears in history before AI response
     user_message = Conversation(
         role='user', 
         prompt_text=prompt, 
@@ -198,14 +245,14 @@ def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
         engineered_prompt=None
     )
     db.add(user_message)
-    db.commit() 
-    db.refresh(user_message)
+    await db.commit() 
+    await db.refresh(user_message)
     
     # --- 4. CACHE MISS: GEMINI API CALL (High Latency Operation) ---
     try:
         print(f"CACHE MISS: Calling Gemini with prompt: {engineered_prompt}")
 
-        # Call the Gemini API for image generation
+        # Gemini API call (takes several seconds)
         gemini_response = client.models.generate_images(
             model='imagen-4.0-generate-001', 
             prompt=engineered_prompt,
@@ -218,12 +265,12 @@ def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
         if not gemini_response.generated_images:
             raise APIError("Gemini generated no images for the prompt.")
             
-        # Get the placeholder URL for the successful generation
+        # Using placeholder URL for successful generation (replace with actual image upload logic later)
         image_url = 'https://picsum.photos/400/400?random=' + str(random.randint(1, 100))
         ai_response_text = f"Analyzing your request for '{prompt}'... Here is your high-resolution AI-designed tattoo concept!"
 
     except APIError as e:
-        # Log failure
+        # Log failure synchronously before raising the exception
         ai_message_fail = Conversation(
             role='ai', 
             prompt_text=f"🚨 Gemini API Failed: {e}", 
@@ -231,32 +278,28 @@ def generate_tattoo(request: PromptRequest, db: Session = Depends(get_db)):
             engineered_prompt=engineered_prompt
         )
         db.add(ai_message_fail)
-        db.commit()
+        await db.commit()
         raise HTTPException(status_code=500, detail=f"AI Generation Failed: {e}")
 
-    # --- 5. CACHE WRITE (DB Write & Redis Write) ---
+    # --- 5. CACHE WRITE & DB LOGGING (Background Tasks) ---
     
-    # DB Write (Log successful AI response)
-    ai_message_success = Conversation(
-        role='ai', 
-        prompt_text=ai_response_text, 
-        generated_image_url=image_url, 
-        engineered_prompt=engineered_prompt
-    )
-    db.add(ai_message_success)
-    db.commit() 
-    
-    # Redis Write (Store the result for 24 hours)
+    # Redis Write (Store the result for 24 hours) - Must be done BEFORE response is sent
     if redis_client and cache_key:
-        cache_data = {
-            "ai_text": ai_response_text,
-            "image_url": image_url,
-        }
+        cache_data = {"ai_text": ai_response_text, "image_url": image_url,}
         redis_client.hset(cache_key, mapping=cache_data)
-        redis_client.expire(cache_key, 60 * 60 * 24) # TTL: 24 hours
+        redis_client.expire(cache_key, 60 * 60 * 24)
         print("CACHE WRITE: Stored successful response in Redis.")
 
-    # 6. Return Final Response
+    # Log successful AI response in the BACKGROUND
+    background_tasks.add_task(
+        log_ai_response_in_background,
+        ai_response_text=ai_response_text,
+        image_url=image_url,
+        engineered_prompt=engineered_prompt,
+        is_cache_hit=False
+    )
+    
+    # --- 6. Return Final Response (Instantaneous) ---
     return {
         "status": "success",
         "ai_text": ai_response_text,
