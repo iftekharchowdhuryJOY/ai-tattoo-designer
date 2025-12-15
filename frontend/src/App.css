@@ -1,42 +1,234 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* Main App Container - Full Screen */
+.app-container {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  /* Removed glass container effect for main wrapper as it's now full screen */
+  overflow: hidden;
+  position: relative;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Header/Title moved to bottom */
+.app-header {
+  padding: 10px 30px 0 30px;
+  background: rgba(15, 23, 42, 0.95);
+  /* Matches input area */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Center the title */
+  border-top: 1px solid var(--glass-border);
+  border-bottom: none;
 }
 
-@keyframes logo-spin {
+.app-title {
+  font-size: 1.2rem;
+  /* Smaller font for bottom placement */
+  background: linear-gradient(135deg, var(--accent-color), var(--success-color));
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+/* Chat Window */
+.chat-window {
+  flex: 1;
+  overflow-y: auto;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  scroll-behavior: smooth;
+  /* Ensure messages don't stretch too wide on huge screens */
+  align-items: center;
+}
+
+/* Message wrapping adjustment */
+.message-wrapper {
+  display: flex;
+  width: 100%;
+  max-width: 1000px;
+  /* Keep messages readable on ultra-wide screens */
+}
+
+/* Message Bubbles */
+.message-wrapper {
+  display: flex;
+  width: 100%;
+}
+
+.message-wrapper.user {
+  justify-content: flex-end;
+}
+
+.message-wrapper.ai {
+  justify-content: flex-start;
+}
+
+.message-bubble {
+  max-width: 80%;
+  padding: 16px 20px;
+  border-radius: 18px;
+  font-size: 1rem;
+  line-height: 1.5;
+  box-shadow: var(--shadow-lg);
+  position: relative;
+  /* Animation */
+  animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes popIn {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: scale(0.9) translateY(10px);
   }
+
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
+.message-bubble.user {
+  background: linear-gradient(135deg, var(--accent-color), #4f46e5);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message-bubble.ai {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  border-bottom-left-radius: 4px;
+}
+
+.sender-name {
+  display: block;
+  font-size: 0.75rem;
+  margin-bottom: 4px;
+  opacity: 0.7;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Tattoo Image Styling */
+.tattoo-image-container {
+  margin-top: 15px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid var(--glass-border);
+  box-shadow: var(--shadow-lg);
+  transition: transform 0.3s ease;
+}
+
+.tattoo-image-container:hover {
+  transform: scale(1.02);
+  border-color: var(--accent-color);
+}
+
+.tattoo-image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Input Area */
+.input-area {
+  padding: 10px 30px 30px 30px;
+  /* Reduced top padding, more bottom padding */
+  background: rgba(15, 23, 42, 0.95);
+  border-top: none;
+  /* Removed as header has it now */
+}
+
+.input-form {
+  display: flex;
+  gap: 12px;
+  position: relative;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.prompt-input {
+  flex: 1;
+  padding: 16px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 1rem;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.prompt-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.prompt-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.send-button {
+  padding: 0 24px;
+  border-radius: 14px;
+  border: none;
+  background: var(--accent-color);
+  color: white;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--accent-glow);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glow);
+}
+
+.send-button:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Loading Dots Animation */
+.loading-dots:after {
+  content: '.';
+  animation: dots 1.5s steps(5, end) infinite;
+}
+
+@keyframes dots {
+
+  0%,
+  20% {
+    content: '.';
   }
-}
 
-.card {
-  padding: 2em;
-}
+  40% {
+    content: '..';
+  }
 
-.read-the-docs {
-  color: #888;
+  60% {
+    content: '...';
+  }
+
+  80%,
+  100% {
+    content: '';
+  }
 }

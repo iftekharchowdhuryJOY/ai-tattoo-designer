@@ -18,15 +18,7 @@ const ChatWindow = ({ chatHistory, isLoading }) => {
     };
 
     return (
-        <div style={{
-            height: '500px',
-            overflowY: 'auto',
-            padding: '15px',
-            border: '1px solid #ccc',
-            display: 'flex',
-            flexDirection: 'column',
-            backgroundColor: '#f9f9f9'
-        }}>
+        <div className="chat-window">
             {/* Map over the historical messages */}
             {chatHistory.map((message) => (
                 <MessageBubble key={message.id} message={message} />

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import './App.css';
 import ChatWindow from './components/ChatWindow';
 import PromptInput from './components/PromptInput';
 
@@ -102,13 +103,16 @@ function App() {
 
 
   return (
-    <div style={{ maxWidth: '800px', margin: '50px auto', padding: '20px', backgroundColor: 'white', boxShadow: '0 0 10px rgba(0,0,0,0.1)' }}>
-      <h1>AI Tattoo Designer</h1>
+    <div className="app-container">
 
-      {/* 1. Chat History Area */}
+      {/* 1. Chat History Area - Now takes up most of the screen */}
       <ChatWindow chatHistory={chatHistory} isLoading={isLoading} />
 
-      {/* 2. Input Field (Passes the handler and loading state) */}
+      {/* 2. Bottom Section: Title + Input */}
+      <header className="app-header">
+        <h1 className="app-title">✨ AI Tattoo Designer</h1>
+      </header>
+
       <PromptInput handleSubmitPrompt={handleSubmitPrompt} isLoading={isLoading} />
 
     </div>
